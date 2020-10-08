@@ -15,6 +15,8 @@
 ### We need to narrow down our data to the relevant species columns.
 all_data <- readRDS("./Data/all_data.RDS")
 catchment_data <- readRDS("./Data/lakesInCatchments.RDS")
+absence_weightings <- readRDS("./Data/absence_weightings.RDS") %>%
+  st_drop_geometry()
 
 # Create a vector to get rid of all the other species
 species_to_remove <- species_list[species_list!=focal_species]
@@ -92,6 +94,12 @@ species_absen_data$dist_n_pop <- nn_nearest_abs$nn.dist[,1]
 # THen get all nearby populations.
 nn_nearby_abs <- get.knnx(species_prese_data[c("utm_x","utm_y")],species_absen_data[c("utm_x","utm_y")],k=70)
 
+# We first take a measure of inverse distance weighting
+weighting_nearby_pop <- nn_nearby_abs$nn.dist
+weighting_nearby_pop[weighting_nearby_pop > 100000] <- NA
+idw <- 1/weighting_nearby_pop
+nearby_inv_weightings_vec <- rowSums(idw,na.rm=TRUE)
+
 # File this down to all populations within 5000m.
 number_nearby_pop_5km <- nn_nearby_abs$nn.dist
 number_nearby_pop_5km[number_nearby_pop_5km < 5000] <- 1
@@ -151,10 +159,11 @@ all_pops_merged[all_pops_merged$downstream_pops<0,] <- 0
 
 
 # Put this into a data frame which we will then add more to later on.
-spatial_data <- data.frame(species_absen_data$no_vatn_lnr, nn_nearest_abs$nn.dist, 
+spatial_data <- data.frame(species_absen_data$no_vatn_lnr, nn_nearest_abs$nn.dist, nearby_inv_weightings_vec,
                            number_nearby_pop_5km_vec, number_nearby_pop_10km_vec, number_nearby_pop_20km_vec,
                            all_pops_merged$upstream_pops, all_pops_merged$downstream_pops)
-colnames(spatial_data) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km",
+colnames(spatial_data) <- c("no_vatn_lnr","dist_n_pop", "nearby_weightings",
+                            "no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km",
                             "upstream_pops","downstream_pops")
 
 # Now we cycle through year by year. All presences in native range are assumed to have been there ebfore the
@@ -167,8 +176,9 @@ for (i in 1:length(time_steps)) {
   
   # Special case for first time step for Rainbow Trout, since they have no historic range in Norway.
   if (nrow(species_presence_historic) == 0) {
-    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, 9999999, 0, 0, 0, 0, 0)
-    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km",
+    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, 9999999, 0, 0, 0, 0, 0, 0)
+    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop", "nearby_weightings","no_n_pop_5km",
+                                         "no_n_pop_10km", "no_n_pop_20km",
                                          "upstream_pops","downstream_pops")
   } else {
     
@@ -179,6 +189,12 @@ for (i in 1:length(time_steps)) {
     k_nearby <- ifelse(nrow(species_presence_historic) < 100, nrow(species_presence_historic)-1, 100)
     
     nn_nearby <- get.knnx(species_presence_historic[c("utm_x","utm_y")],species_intro_historic[c("utm_x","utm_y")],k=k_nearby)
+    
+    # We first take a measure of inverse distance weighting
+    weighting_nearby_pop <- nn_nearby$nn.dist
+    weighting_nearby_pop[weighting_nearby_pop > 100000 | weighting_nearby_pop == 0] <- NA
+    idw <- 1/weighting_nearby_pop
+    nearby_inv_weightings_vec <- rowSums(idw,na.rm=TRUE)
     
     number_nearby_pop_5km <- nn_nearby$nn.dist
     number_nearby_pop_5km[number_nearby_pop_5km < 5000 & number_nearby_pop_5km > 0] <- 1
@@ -226,10 +242,10 @@ for (i in 1:length(time_steps)) {
     all_pops_merged[all_pops_merged$downstream_pops<0,] <- 0
     
     
-    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, nearest_pop_vec, 
+    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, nearest_pop_vec, nearby_inv_weightings_vec,
                                         number_nearby_pop_5km_vec, number_nearby_pop_10km_vec, number_nearby_pop_20km_vec,
                                         all_pops_merged$upstream_pops, all_pops_merged$downstream_pops)
-    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km",
+    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop", "nearby_weightings" ,"no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km",
                                          "upstream_pops","downstream_pops")
   }
   
@@ -275,6 +291,28 @@ display_duplicates <- function(duplicated_vatn_Lnrs) {
   species_model_data %>% filter(no_vatn_lnr %in% duplicated_vatn_Lnrs)
 }
 
+#---------------------------------------------------------------------#
+# 3D. Create weighted absences ####
+#
+# We want to select absences that match the spatial bias displayed by
+# our presences.
+#
+#---------------------------------------------------------------------#
+
+species_absences_weightings <- merge(filter(species_model_data,native==0 & presence == 0),
+                                  absence_weightings[,c("no_vatn_lnr","prob")],
+                                  all.x=TRUE, by="no_vatn_lnr")
+species_absences_weightings$prob[is.na(species_absences_weightings$prob)] <- 0
+
+
+get_absences <- sample(species_absences_weightings$waterBodyID, 10000,
+                        prob=species_absences_weightings$prob)
+
+
+
+species_model_data$weighted_absences <- ifelse(species_model_data$waterBodyID %in% get_absences,
+                                                     1,0)
+
 # We're now dealing with species-specific data. All the data will be transferred to one file. 
 # Create that file if it hasn't already been made.
 if (dir.exists(paste0("./Data/Species_Data")) == FALSE) {dir.create(paste0("./Data/Species_Data"))}
@@ -289,7 +327,7 @@ print("Finished species data for use in model, can be found in species file in d
 
 
 #---------------------------------------------------------------------#
-# 3D. Check correlations between variables ####
+# 3E. Check correlations between variables ####
 #
 # There is a chance that there may be a correlation between our number
 # of nearby populations and number of downstream populations variables.
