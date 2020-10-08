@@ -8,7 +8,8 @@
 ### Let's get all the libraries in
 packages.needed <- c('dplyr', 'pool', 'postGIStools', 'sf', 'getPass', 
                      'rgbif', 'mapedit', 'rio', 'raster', 'FNN', 'readr',
-                     'ggplot2', 'greta', 'stringr', 'lwgeom', 'purrr')
+                     'ggplot2', 'greta', 'stringr', 'purrr', 'lwgeom', 
+                     'pROC', 'modEvA', 'furrr', 'future')
 
 packages.toinstall <- setdiff(packages.needed, rownames(installed.packages())  
 ) 
@@ -24,9 +25,9 @@ source("ExtraFunctions.R")
 # Define species of interest
 
 species_list <- c("Coregonus lavaretus", "Esox lucius", "Rutilus rutilus",
-                  "Scardinius erythrophthalmus", "Perca fluviatilis", "Oncorhynchus mykiss")
+                  "Scardinius erythrophthalmus", "Perca fluviatilis")
 common_names <- c("Whitefish", "Pike", "Roach",
-                  "Rudd", "Perch", "Rainbow trout")
+                  "Rudd", "Perch")
 
 # All the data you create will be transferred into a folder. Let's create that folder now.
 if (dir.exists(paste0("./Data")) == FALSE
@@ -48,7 +49,7 @@ download_native_range <- FALSE        # Have you already downloaded species' nat
 # dist_threshold sets the distance between a point and the nearestlake which
 # is an acceptable match. So if dist_threshold is set to 50, a point will only be
 # matched to a lake if it is less than 50m away.
-dist_threshold <- 50
+dist_threshold <- 100
 
 source("./R/1_GetIntroductions.R")
 
@@ -67,10 +68,7 @@ source("./R/2_BioticDataAddition.R")
 
 # From now on everything becomes species specific. The next script gets connectivity data 
 # for indivudal species.
-focal_species <- species_list[6]
-
-# Define radius you want to measure nearby populations by (see main text).
-population_threshold <- 20
+focal_species <- species_list[1]
 
 # Don't worry about the duplication if the only lake that has been duplicated is 39447.
 # If there are others, let me know.
@@ -89,23 +87,58 @@ source("./R/3_SpeciesDataAddition.R")
 # 6. Number of populations within km radius specified by 'population threshold'
 # 7. Number of populations upstream
 # 8. Number of populations downstream
+# 9. Nearby popualtion weighting
 
 # To leave one or more of these parameters out, simply input the number into the object below.
-parameters_to_ignore <- NA
-interaction_terms <- list(c(5,6), c(5,4))
+# I have chosen to run the model without parameters 4 and 6, and instead use parameter 9 as
+# a population connectivity covariate.
+parameters_to_ignore <- c(4,6)
+interaction_terms <- list(c(9,5), c(7,9), c(7,8))
 
-# This script will take a while, as it's running a model on up to 40,000 lakes. Grab a 
+# If we want to use the background sampling of pseudo-absences, switch this on.
+use_weighted_absences <- FALSE
+
+# The sue of weighted distances should be true here, unless you are using parameters 4 and 6
+# above instead of 9. The manuscript uses parameter 9 and as such I do not recommend messing
+# with this.
+use_weighted_distances <- TRUE
+
+# Define radius you want to measure nearby populations by.
+# Note that if you're using weighted inverse distances this is useless, but still needs
+# to be in the script.
+population_threshold <- 20
+
+# Set the number of runs you want from your model. Initial runs defines both number of burn-ins
+# and subsequent runs, n_extra_runs defines how many extra runs you would like on top of that.
+initial_runs <- 500
+n_extra_runs <- 1000
+
+# These script will take a while, as they're running models on up to 40,000 lakes. Grab a 
 # coffee. Teach it to do algebra. There are two options, one which includes an interaction effect
 # and one which doesn't. That which does is our default.
-#source("./R/4_FullModelConstruct.R")
-source("./R/4_FullModelConstruct_InteractionsBeta.R")
+
+# The first script runs the model on all lakes. The second (Partitioned) runs the model on 5
+# different trainign sets of data to perform k-fold cross-validation.
+source("./R/4_FullModelConstruct_ConcurrentSpecies.R")
+source("./R/4_FullModelConstruct_ConcurrentSpecies_Partitioned.R")
+
+# The following script is intended only for validation data, and outputs AUC, deviance explained,
+# sensitivity and specificity tables for both our full model and that using background absence 
+# data. 
+
+# Only thign we need to define is which model we're using, the full model or that which uses 
+# restricted background sampling.
+validate_full_model <- TRUE
+source("./R/4a_ModelDeviance.R")
 
 # Next one gives you uncertainty from each lake, convergence diagnostic,
 # beta intervals, and model deviance. You can check them out individually by
-# looking at the object 'model_analysis' after they've run.
+# looking at the object 'model_analysis' after they've run. You can check full model
+# deviance stats if you want but it's not really informative and takes forever.
 
-#source("./R/5_ModelAnalysis.R")
-source("./R/5_ModelAnalysis_InteractionsBeta.R")
+calculate_deviance <- FALSE
+
+source("./R/5_ModelAnalysis_ConcurrentSpecies.R")
 
 # Now we can run our simulations. need to define which model we want to use.
 # n_loops simply tells us how many iterations we want to run. Be careful,
@@ -116,14 +149,11 @@ source("./R/5_ModelAnalysis_InteractionsBeta.R")
 n_loops <- 1000
 temp_scenario <- FALSE
 
-#source("./R/6_Looping.R")
-source("./R/6_Looping_InteractionsBeta.R")
+# Here you do need a species-specific parameter.
+focal_species <- species_list[4]
 
-# The following scripts are slight variations on the script above, in that
-# they do our retrospective scenario modelling.
-
-#source("./R/6a_HistoricalForecast.R")
-source("./R/6a_HistoricalForecast_InteractionsBeta.R")
+source("./R/6_LoopingConcurrentModels.R")
+source("./R/6_LoopingConcurrentModels_Parallel.R")
 
 # Last 2 scripts are all about data visualisation. n_bins dictates resolution of
 # your hexagons. If you have already downloaded basin data, let download_basins =
@@ -131,17 +161,16 @@ source("./R/6a_HistoricalForecast_InteractionsBeta.R")
 
 n_bins <- 120
 download_basins=FALSE
+compass <- FALSE
+give_basin_plots <- FALSE
+plot_internal_validation <- FALSE
+scale_bar <- FALSE
 
 # The script produces an object calls 'maps', which you can then go through to find
 # the maps you're after. These also include maps which are based on watersheds,
 # as well as a few which reflect internal validation.
 
-source("./R/7_Visualisations.R")
-
-# Lastly, we have some comparative visualisations, including beta parameter effects
-# and deviance comparisons. To take a look after the script has run, check the object
-# comparative_stats.
-# source("./R/8_ComparativeViz.R")
-source("./R/8_ComparativeViz_InteractionsBeta.R")
+source("./R/7_Visualisations_Concurrent.R")
+maps$predicted_appearances_fullAbs
 
 
