@@ -32,7 +32,7 @@ if (initiate_download == TRUE) {
   
   # Take the key given by the code above and initiate the download using the following command
   download_key <- occ_download(
-    paste0('taxonKey = ',paste(keys[1:6],collapse=",")),
+    paste0('taxonKey = ',paste(keys,collapse=",")),
     type = "or"
   ) %>% 
     occ_download_meta
