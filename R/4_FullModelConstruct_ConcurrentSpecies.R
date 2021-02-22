@@ -9,6 +9,18 @@
 # Import raw data
 
 # Create priors
+
+# In order to estimate variation between species responses to our covariates, the regression coefficients 
+# for each covariate were drawn from a shared distribution across species (our global means and standard deviations).
+# All global means were assigned non-informative normal priors, with global standard deviations assigned 
+# non-informative uniform priors, all with a mean of zero and standard deviation
+# of 10. 
+
+# In addition to individual species responses to environmental covariates, the use of cross-species 
+# parameters provides us with average regression coefficient per environmental covariate and allows us to 
+# estimate the varying effects of each covariate across species.
+
+
 global_alpha <- normal(0, 10, dim = 1)
 global_alpha_sd <- uniform(0, 10, dim = 1) 
 alpha <- normal(global_alpha, global_alpha_sd, dim = length(species_list))
